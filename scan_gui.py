@@ -8,6 +8,7 @@ import threading
 import time
 import re
 import os
+import pygame
 
 # ---------- CONFIG ----------
 DB_HOST = "10.69.1.52"   # Windows Server (Internal network)
@@ -195,6 +196,31 @@ def validate_job_number(job_number):
     return True, ""
 
 
+def init_sound():
+    """Initialize pygame mixer for sound playback."""
+    try:
+        pygame.mixer.init()
+        return True
+    except Exception as e:
+        print(f"Warning: Could not initialize sound system: {e}")
+        return False
+
+
+def play_sound(sound_type):
+    """Play a sound file (positive or negative).
+
+    Args:
+        sound_type: 'positive' or 'negative'
+    """
+    try:
+        sound_path = os.path.join(os.path.dirname(__file__), 'sounds', f'{sound_type}.mp3')
+        if os.path.exists(sound_path):
+            pygame.mixer.music.load(sound_path)
+            pygame.mixer.music.play()
+    except Exception as e:
+        print(f"Warning: Could not play {sound_type} sound: {e}")
+
+
 def insert_scan(job_number, hostname, location):
     """Insert scan in background thread. Scanned value is the job number."""
     pi_ip = get_pi_ip()
@@ -330,7 +356,10 @@ class ScanApp(tk.Tk):
             self.show_validation_error(error_msg)
             self.barcode_var.set("")
             return
-        
+
+        # Play positive sound for successful validation
+        play_sound('positive')
+
         # Render scanned value immediately before starting DB call
         self.scanned_var.set(job_number)
         self.status_var.set(f"Scanning: {job_number}")
@@ -340,6 +369,9 @@ class ScanApp(tk.Tk):
     
     def show_validation_error(self, message):
         """Show validation error popup that auto-dismisses after 2 seconds."""
+        # Play negative sound for validation failure
+        play_sound('negative')
+
         # Create popup window
         popup = tk.Toplevel(self)
         popup.title("Validation Error")
@@ -430,5 +462,7 @@ class ScanApp(tk.Tk):
 if __name__ == "__main__":
     # Ensure database tables exist before starting GUI
     ensure_pi_devices_table()
+    # Initialize sound system
+    init_sound()
     app = ScanApp()
     app.mainloop()
