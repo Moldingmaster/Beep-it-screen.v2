@@ -217,6 +217,9 @@ def play_sound(sound_type):
         if os.path.exists(sound_path):
             pygame.mixer.music.load(sound_path)
             pygame.mixer.music.play()
+            print(f"Playing {sound_type} sound from {sound_path}")
+        else:
+            print(f"Warning: Sound file not found: {sound_path}")
     except Exception as e:
         print(f"Warning: Could not play {sound_type} sound: {e}")
 
@@ -360,6 +363,9 @@ class ScanApp(tk.Tk):
         # Play positive sound for successful validation
         play_sound('positive')
 
+        # Show success popup
+        self.show_validation_success(job_number)
+
         # Render scanned value immediately before starting DB call
         self.scanned_var.set(job_number)
         self.status_var.set(f"Scanning: {job_number}")
@@ -367,6 +373,49 @@ class ScanApp(tk.Tk):
         threading.Thread(target=self.log_to_db, args=(
             job_number,), daemon=True).start()
     
+    def show_validation_success(self, job_number):
+        """Show validation success popup that auto-dismisses after 1.5 seconds."""
+        # Create popup window
+        popup = tk.Toplevel(self)
+        popup.title("Scan Successful")
+        popup.configure(bg="#e8f5e9")
+        popup.overrideredirect(True)  # Remove window decorations
+
+        # Center the popup
+        popup_width = 600
+        popup_height = 200
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - popup_width) // 2
+        y = (screen_height - popup_height) // 2
+        popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+
+        # Success message
+        success_label = tk.Label(
+            popup,
+            text="✓ Scan Successful",
+            font=("Segoe UI", 24, "bold"),
+            bg="#e8f5e9",
+            fg="#2e7d32"
+        )
+        success_label.pack(pady=(30, 10))
+
+        detail_label = tk.Label(
+            popup,
+            text=f"Job {job_number} accepted",
+            font=("Segoe UI", 18),
+            bg="#e8f5e9",
+            fg="#2e7d32",
+            wraplength=550
+        )
+        detail_label.pack(pady=(0, 30))
+
+        # Auto-dismiss after 1.5 seconds
+        popup.after(1500, popup.destroy)
+
+        # Keep focus on main window's entry field
+        self.after(100, self.barcode_entry.focus_set)
+
     def show_validation_error(self, message):
         """Show validation error popup that auto-dismisses after 2 seconds."""
         # Play negative sound for validation failure
@@ -377,7 +426,7 @@ class ScanApp(tk.Tk):
         popup.title("Validation Error")
         popup.configure(bg="#ffebee")
         popup.overrideredirect(True)  # Remove window decorations
-        
+
         # Center the popup
         popup_width = 600
         popup_height = 200
@@ -386,7 +435,7 @@ class ScanApp(tk.Tk):
         x = (screen_width - popup_width) // 2
         y = (screen_height - popup_height) // 2
         popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
-        
+
         # Error message
         error_label = tk.Label(
             popup,
@@ -396,7 +445,7 @@ class ScanApp(tk.Tk):
             fg="#c62828"
         )
         error_label.pack(pady=(30, 10))
-        
+
         detail_label = tk.Label(
             popup,
             text=message,
@@ -406,10 +455,10 @@ class ScanApp(tk.Tk):
             wraplength=550
         )
         detail_label.pack(pady=(0, 30))
-        
+
         # Auto-dismiss after 2 seconds
         popup.after(2000, popup.destroy)
-        
+
         # Keep focus on main window's entry field
         self.after(100, self.barcode_entry.focus_set)
 
