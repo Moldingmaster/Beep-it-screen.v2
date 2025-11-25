@@ -9,6 +9,7 @@ import time
 import re
 import os
 import subprocess
+import sys
 
 # ---------- CONFIG ----------
 DB_HOST = "10.69.1.52"   # Windows Server (Internal network)
@@ -197,38 +198,61 @@ def validate_job_number(job_number):
 
 
 def init_sound():
-    """Initialize sound system - check if mpg123 is available."""
+    """Initialize sound system - check if aplay is available."""
     try:
-        result = subprocess.run(['which', 'mpg123'], capture_output=True)
+        result = subprocess.run(['which', 'aplay'], capture_output=True)
         if result.returncode == 0:
-            print("mpg123 found, sound enabled")
+            print("aplay found, sound enabled", flush=True)
             return True
         else:
-            print("Warning: mpg123 not found, sound disabled")
+            print("Warning: aplay not found, sound disabled", flush=True)
             return False
     except Exception as e:
-        print(f"Warning: Could not check sound system: {e}")
+        print(f"Warning: Could not check sound system: {e}", flush=True)
         return False
 
 
 def play_sound(sound_type):
-    """Play a sound file (positive or negative) using mpg123.
+    """Play a sound file (positive or negative) using aplay.
 
     Args:
         sound_type: 'positive' or 'negative'
     """
+    print(f"DEBUG: play_sound called with type={sound_type}", flush=True)
     try:
-        sound_path = os.path.join(os.path.dirname(__file__), 'sounds', f'{sound_type}.mp3')
-        if os.path.exists(sound_path):
-            # Use mpg123 in background - more reliable than pygame in service context
-            subprocess.Popen(['mpg123', '-q', sound_path],
+        # Try WAV first, fall back to MP3
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        wav_path = os.path.join(base_path, 'sounds', f'{sound_type}.wav')
+        mp3_path = os.path.join(base_path, 'sounds', f'{sound_type}.mp3')
+
+        print(f"DEBUG: Looking for sound files:", flush=True)
+        print(f"  WAV: {wav_path} (exists={os.path.exists(wav_path)})", flush=True)
+        print(f"  MP3: {mp3_path} (exists={os.path.exists(mp3_path)})", flush=True)
+
+        if os.path.exists(wav_path):
+            # Use aplay for WAV files - most reliable for ALSA
+            print(f"Playing WAV: {wav_path}", flush=True)
+            result = subprocess.run(['aplay', '-q', wav_path],
+                                  capture_output=True,
+                                  timeout=5)
+            if result.returncode != 0:
+                print(f"aplay error: {result.stderr.decode()}", flush=True)
+            else:
+                print(f"Sound played successfully", flush=True)
+        elif os.path.exists(mp3_path):
+            # Fall back to mpg123 for MP3
+            print(f"Playing MP3: {mp3_path}", flush=True)
+            subprocess.Popen(['mpg123', '-q', mp3_path],
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
-            print(f"Playing {sound_type} sound from {sound_path}")
+            print(f"mpg123 started", flush=True)
         else:
-            print(f"Warning: Sound file not found: {sound_path}")
+            print(f"ERROR: No sound file found for {sound_type}", flush=True)
     except Exception as e:
-        print(f"Warning: Could not play {sound_type} sound: {e}")
+        print(f"ERROR playing sound: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
 
 
 def insert_scan(job_number, hostname, location):
