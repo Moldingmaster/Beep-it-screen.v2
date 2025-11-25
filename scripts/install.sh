@@ -49,7 +49,8 @@ log "Installing system dependencies..."
 apt-get update -qq || error "Failed to update apt package list"
 apt-get install -y \
     python3-tk \
-    python3-psycopg2 || error "Failed to install system dependencies"
+    python3-psycopg2 \
+    python3-pygame || error "Failed to install system dependencies"
 
 # Check if running on Raspberry Pi
 if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null && [[ "${FORCE_INSTALL:-}" != "1" ]]; then
@@ -70,6 +71,11 @@ mkdir -p "$INSTALL_DIR"
 # Install application
 log "Installing application files..."
 install -m 0755 "$REPO_ROOT/scan_gui.py" "$INSTALL_DIR/scan_gui.py"
+
+# Copy sounds directory
+log "Installing sound files..."
+mkdir -p "$INSTALL_DIR/sounds"
+cp -r "$REPO_ROOT/sounds/"* "$INSTALL_DIR/sounds/" || error "Failed to copy sound files"
 
 # Create initial VERSION file
 if [[ -f "$REPO_ROOT/updates/VERSION" ]]; then
