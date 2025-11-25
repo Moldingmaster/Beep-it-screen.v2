@@ -8,7 +8,7 @@ import threading
 import time
 import re
 import os
-import pygame
+import subprocess
 
 # ---------- CONFIG ----------
 DB_HOST = "10.69.1.52"   # Windows Server (Internal network)
@@ -197,17 +197,22 @@ def validate_job_number(job_number):
 
 
 def init_sound():
-    """Initialize pygame mixer for sound playback."""
+    """Initialize sound system - check if mpg123 is available."""
     try:
-        pygame.mixer.init()
-        return True
+        result = subprocess.run(['which', 'mpg123'], capture_output=True)
+        if result.returncode == 0:
+            print("mpg123 found, sound enabled")
+            return True
+        else:
+            print("Warning: mpg123 not found, sound disabled")
+            return False
     except Exception as e:
-        print(f"Warning: Could not initialize sound system: {e}")
+        print(f"Warning: Could not check sound system: {e}")
         return False
 
 
 def play_sound(sound_type):
-    """Play a sound file (positive or negative).
+    """Play a sound file (positive or negative) using mpg123.
 
     Args:
         sound_type: 'positive' or 'negative'
@@ -215,8 +220,10 @@ def play_sound(sound_type):
     try:
         sound_path = os.path.join(os.path.dirname(__file__), 'sounds', f'{sound_type}.mp3')
         if os.path.exists(sound_path):
-            pygame.mixer.music.load(sound_path)
-            pygame.mixer.music.play()
+            # Use mpg123 in background - more reliable than pygame in service context
+            subprocess.Popen(['mpg123', '-q', sound_path],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
             print(f"Playing {sound_type} sound from {sound_path}")
         else:
             print(f"Warning: Sound file not found: {sound_path}")
