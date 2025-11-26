@@ -57,6 +57,7 @@ cd "$REPO_ROOT"
 bash scripts/convert-sounds-to-wav.sh || error "Failed to convert sound files"
 
 # Configure ALSA audio for HDMI (touchscreen speakers)
+# Note: Using plughw for automatic format conversion (required for HDMI audio)
 log "Configuring ALSA audio for HDMI output..."
 cat > /etc/asound.conf <<EOF
 pcm.!default {
@@ -69,6 +70,7 @@ ctl.!default {
     card 1
 }
 EOF
+log "ALSA configured to use plughw:1,0 (HDMI with format conversion)"
 
 log "Testing audio configuration..."
 if command -v aplay &> /dev/null; then
