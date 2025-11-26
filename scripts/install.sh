@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Beep It Installation Script for Raspberry Pi
-# This script sets up the Beep It application to run on startup
-
-# ============================================================
-# GitHub Personal Access Token (read-only) for auto-updates
-# This token is shared across all Pis for fetching releases
-# Generate at: https://github.com/settings/tokens
-# Required scope: repo (read-only access to private repos)
-# Edit this variable with your actual token before deploying
-# ============================================================
-GH_TOKEN_RO="{{GH_TOKEN_RO}}"
+# Beep It v2 Installation Script for Raspberry Pi
+# This script sets up the Beep It application with audio fixes
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-INSTALL_DIR="/opt/beep_it"
+INSTALL_DIR="/home/pi/Beep-it-screen.v2"
 SYSTEMD_DIR="/etc/systemd/system"
-DEFAULT_DIR="/etc/default"
 
 log() { printf "[install] %s\n" "$*"; }
 error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
@@ -25,7 +15,7 @@ error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
 # Check for Python 3
 log "Checking for Python 3..."
 if ! command -v python3 &> /dev/null; then
-    error "Python 3 is not installed. Install it with: sudo apt-get install python3 python3-pip python3-venv"
+    error "Python 3 is not installed. Install it with: sudo apt-get install python3"
 fi
 
 # Verify Python version (minimum 3.7 for tkinter support)
@@ -39,18 +29,15 @@ fi
 
 log "Found Python $PYTHON_VERSION"
 
-# Check for pip3
-if ! command -v pip3 &> /dev/null; then
-    error "pip3 is not installed. Install it with: sudo apt-get install python3-pip"
-fi
-
 # Install system dependencies
 log "Installing system dependencies..."
 apt-get update -qq || error "Failed to update apt package list"
 apt-get install -y \
     python3-tk \
     python3-psycopg2 \
-    python3-pygame || error "Failed to install system dependencies"
+    ffmpeg \
+    mpg123 \
+    alsa-utils || error "Failed to install system dependencies"
 
 # Check if running on Raspberry Pi
 if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null && [[ "${FORCE_INSTALL:-}" != "1" ]]; then
@@ -62,59 +49,66 @@ if [[ $EUID -ne 0 ]]; then
    error "This script must be run as root (use sudo)"
 fi
 
-log "Installing Beep It application..."
+log "Installing Beep It v2 application..."
 
-# Create installation directory
-log "Creating installation directory: $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
+# Convert sound files to WAV format
+log "Converting sound files to WAV format..."
+cd "$REPO_ROOT"
+bash scripts/convert-sounds-to-wav.sh || error "Failed to convert sound files"
 
-# Install application
-log "Installing application files..."
-install -m 0755 "$REPO_ROOT/scan_gui.py" "$INSTALL_DIR/scan_gui.py"
+# Configure ALSA audio for HDMI (touchscreen speakers)
+log "Configuring ALSA audio for HDMI output..."
+cat > /etc/asound.conf <<EOF
+pcm.!default {
+    type plug
+    slave.pcm "hw:1,0"
+}
 
-# Copy sounds directory
-log "Installing sound files..."
-mkdir -p "$INSTALL_DIR/sounds"
-cp -r "$REPO_ROOT/sounds/"* "$INSTALL_DIR/sounds/" || error "Failed to copy sound files"
-
-# Create initial VERSION file
-if [[ -f "$REPO_ROOT/updates/VERSION" ]]; then
-    install -m 0644 "$REPO_ROOT/updates/VERSION" "$INSTALL_DIR/VERSION"
-else
-    echo "0.0.0" > "$INSTALL_DIR/VERSION"
-fi
-
-# Note: Python dependencies are now installed via apt (python3-psycopg2)
-# No pip installation needed
-
-# Install systemd service for the application
-log "Installing systemd service: beep-it.service"
-install -m 0644 "$REPO_ROOT/contrib/systemd/beep-it.service" "$SYSTEMD_DIR/beep-it.service"
-
-# Install update script and systemd units
-log "Installing auto-update mechanism..."
-install -m 0755 "$REPO_ROOT/scripts/beep-it-update" "/usr/local/sbin/beep-it-update"
-install -m 0644 "$REPO_ROOT/contrib/systemd/beep-it-update.service" "$SYSTEMD_DIR/beep-it-update.service"
-install -m 0644 "$REPO_ROOT/contrib/systemd/beep-it-update.timer" "$SYSTEMD_DIR/beep-it-update.timer"
-
-# Configure environment for updater
-log "Configuring GitHub token for auto-updates..."
-cat > "$DEFAULT_DIR/beep-it-update" <<EOF
-# GitHub Personal Access Token (read-only) for fetching private releases
-# This token is shared across all Pis
-GH_TOKEN_RO=${GH_TOKEN_RO}
+ctl.!default {
+    type hw
+    card 1
+}
 EOF
-chmod 600 "$DEFAULT_DIR/beep-it-update"
 
-if [[ "$GH_TOKEN_RO" == "{{GH_TOKEN_RO}}" ]]; then
-    log "WARNING: GitHub token is still set to placeholder!"
-    log "Edit the GH_TOKEN_RO variable at the top of this script and re-run."
-    log "Auto-updates will not work until the token is configured."
-    SKIP_UPDATE_START=true
+log "Testing audio configuration..."
+if command -v aplay &> /dev/null; then
+    log "Audio configured. Test with: aplay $INSTALL_DIR/sounds/positive.wav"
 else
-    log "GitHub token configured successfully!"
-    SKIP_UPDATE_START=false
+    error "aplay not found after installation"
 fi
+
+# Create systemd service
+log "Creating systemd service: beep-it.service"
+cat > "$SYSTEMD_DIR/beep-it.service" <<EOF
+[Unit]
+Description=Beep It Job Scanner Application
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+Group=audio
+WorkingDirectory=$INSTALL_DIR
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
+ExecStart=/usr/bin/python3 $INSTALL_DIR/scan_gui.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+# Setup database
+log "Database setup..."
+log "Run these commands to setup the database:"
+log "  psql -h 10.69.1.52 -U postgres -d postgres -f $INSTALL_DIR/migrations/001_create_pi_devices.sql"
+log "  psql -h 10.69.1.52 -U postgres -d postgres -f $INSTALL_DIR/migrations/002_add_hostname_to_scan_log.sql"
+log "  Password: RxpJcA7FZRiUCPXhLX8T"
+log ""
+log "Then register this Pi:"
+log "  psql -h 10.69.1.52 -U postgres -d postgres -c \"INSERT INTO pi_devices (hostname, location, is_active) VALUES ('\$(hostname)', '\$(hostname)', true) ON CONFLICT (hostname) DO UPDATE SET is_active = true;\""
+log ""
 
 # Reload systemd
 log "Reloading systemd daemon..."
@@ -127,15 +121,6 @@ systemctl enable beep-it.service
 log "Starting beep-it.service..."
 systemctl start beep-it.service
 
-# Enable and optionally start the update timer
-log "Enabling beep-it-update.timer..."
-systemctl enable beep-it-update.timer
-
-if [[ "${SKIP_UPDATE_START:-false}" == "false" ]]; then
-    log "Starting beep-it-update.timer..."
-    systemctl start beep-it-update.timer
-fi
-
 log ""
 log "=============================================="
 log "Installation complete!"
@@ -143,15 +128,14 @@ log "=============================================="
 log ""
 log "The Beep It application is now running!"
 log ""
-if [[ "${SKIP_UPDATE_START:-false}" == "true" ]]; then
-    log "Note: Auto-updates are not configured yet."
-    log "Edit GH_TOKEN_RO at the top of this script and re-run to enable auto-updates."
-fi
+log "Next steps:"
+log "1. Run the database migration commands shown above"
+log "2. Register this Pi in the database"
+log "3. Test the application by scanning a barcode"
 log ""
 log "Useful commands:"
 log "  - Check app status:    sudo systemctl status beep-it.service"
 log "  - View app logs:       sudo journalctl -u beep-it.service -f"
 log "  - Restart app:         sudo systemctl restart beep-it.service"
-log "  - Check update timer:  sudo systemctl list-timers beep-it-update.timer"
-log "  - Manual update:       sudo systemctl start beep-it-update.service"
+log "  - Stop app:            sudo systemctl stop beep-it.service"
 log ""
