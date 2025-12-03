@@ -8,6 +8,8 @@ import threading
 import time
 import re
 import os
+import subprocess
+import sys
 
 # ---------- CONFIG ----------
 DB_HOST = "10.69.1.52"   # Windows Server (Internal network)
@@ -16,7 +18,7 @@ DB_NAME = "postgres"
 DB_USER = "postgres"
 DB_PASS = "RxpJcA7FZRiUCPXhLX8T"
 LOCATION_REFRESH_INTERVAL = 300  # Refresh location from DB every 5 minutes (in seconds)
-VERSION = "0.1.4"  # Application version
+VERSION = "0.1.6"  # Application version
 # ----------------------------
 
 
@@ -195,6 +197,64 @@ def validate_job_number(job_number):
     return True, ""
 
 
+def init_sound():
+    """Initialize sound system - check if aplay is available."""
+    try:
+        result = subprocess.run(['which', 'aplay'], capture_output=True)
+        if result.returncode == 0:
+            print("aplay found, sound enabled", flush=True)
+            return True
+        else:
+            print("Warning: aplay not found, sound disabled", flush=True)
+            return False
+    except Exception as e:
+        print(f"Warning: Could not check sound system: {e}", flush=True)
+        return False
+
+
+def play_sound(sound_type):
+    """Play a sound file (positive or negative) using aplay.
+
+    Args:
+        sound_type: 'positive' or 'negative'
+    """
+    print(f"DEBUG: play_sound called with type={sound_type}", flush=True)
+    try:
+        # Try WAV first, fall back to MP3
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        wav_path = os.path.join(base_path, 'sounds', f'{sound_type}.wav')
+        mp3_path = os.path.join(base_path, 'sounds', f'{sound_type}.mp3')
+
+        print(f"DEBUG: Looking for sound files:", flush=True)
+        print(f"  WAV: {wav_path} (exists={os.path.exists(wav_path)})", flush=True)
+        print(f"  MP3: {mp3_path} (exists={os.path.exists(mp3_path)})", flush=True)
+
+        if os.path.exists(wav_path):
+            # Use aplay for WAV files - most reliable for ALSA
+            print(f"Playing WAV: {wav_path}", flush=True)
+            result = subprocess.run(['aplay', '-q', wav_path],
+                                  capture_output=True,
+                                  timeout=5)
+            if result.returncode != 0:
+                print(f"aplay error: {result.stderr.decode()}", flush=True)
+            else:
+                print(f"Sound played successfully", flush=True)
+        elif os.path.exists(mp3_path):
+            # Fall back to mpg123 for MP3
+            print(f"Playing MP3: {mp3_path}", flush=True)
+            subprocess.Popen(['mpg123', '-q', mp3_path],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            print(f"mpg123 started", flush=True)
+        else:
+            print(f"ERROR: No sound file found for {sound_type}", flush=True)
+    except Exception as e:
+        print(f"ERROR playing sound: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+
+
 def insert_scan(job_number, hostname, location):
     """Insert scan in background thread. Scanned value is the job number."""
     pi_ip = get_pi_ip()
@@ -234,6 +294,11 @@ class ScanApp(tk.Tk):
         self.hostname = get_hostname()
         self.location = "Loading..."
         self.location_error = None
+
+        # Secret exit mechanism: track escape key presses
+        self.escape_presses = []
+        self.escape_window = 2.0  # seconds - time window for 3 presses
+        self.escape_required = 3  # number of presses needed
 
         # Fonts
         label_font = ("Segoe UI", 28)
@@ -319,6 +384,9 @@ class ScanApp(tk.Tk):
         # Bind Enter key
         self.barcode_entry.bind("<Return>", self.handle_scan)
 
+        # Bind Escape key for secret exit (3 presses within 2 seconds)
+        self.bind("<Escape>", self.handle_escape)
+
     def handle_scan(self, event):
         job_number = self.barcode_var.get().strip()
         if not job_number:
@@ -330,7 +398,13 @@ class ScanApp(tk.Tk):
             self.show_validation_error(error_msg)
             self.barcode_var.set("")
             return
-        
+
+        # Play positive sound for successful validation
+        play_sound('positive')
+
+        # Show success popup
+        self.show_validation_success(job_number)
+
         # Render scanned value immediately before starting DB call
         self.scanned_var.set(job_number)
         self.status_var.set(f"Scanning: {job_number}")
@@ -338,14 +412,14 @@ class ScanApp(tk.Tk):
         threading.Thread(target=self.log_to_db, args=(
             job_number,), daemon=True).start()
     
-    def show_validation_error(self, message):
-        """Show validation error popup that auto-dismisses after 2 seconds."""
+    def show_validation_success(self, job_number):
+        """Show validation success popup that auto-dismisses after 1.5 seconds."""
         # Create popup window
         popup = tk.Toplevel(self)
-        popup.title("Validation Error")
-        popup.configure(bg="#ffebee")
+        popup.title("Scan Successful")
+        popup.configure(bg="#e8f5e9")
         popup.overrideredirect(True)  # Remove window decorations
-        
+
         # Center the popup
         popup_width = 600
         popup_height = 200
@@ -354,7 +428,53 @@ class ScanApp(tk.Tk):
         x = (screen_width - popup_width) // 2
         y = (screen_height - popup_height) // 2
         popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
-        
+
+        # Success message
+        success_label = tk.Label(
+            popup,
+            text="✓ Scan Successful",
+            font=("Segoe UI", 24, "bold"),
+            bg="#e8f5e9",
+            fg="#2e7d32"
+        )
+        success_label.pack(pady=(30, 10))
+
+        detail_label = tk.Label(
+            popup,
+            text=f"Job {job_number} accepted",
+            font=("Segoe UI", 18),
+            bg="#e8f5e9",
+            fg="#2e7d32",
+            wraplength=550
+        )
+        detail_label.pack(pady=(0, 30))
+
+        # Auto-dismiss after 1.5 seconds
+        popup.after(1500, popup.destroy)
+
+        # Keep focus on main window's entry field
+        self.after(100, self.barcode_entry.focus_set)
+
+    def show_validation_error(self, message):
+        """Show validation error popup that auto-dismisses after 2 seconds."""
+        # Play negative sound for validation failure
+        play_sound('negative')
+
+        # Create popup window
+        popup = tk.Toplevel(self)
+        popup.title("Validation Error")
+        popup.configure(bg="#ffebee")
+        popup.overrideredirect(True)  # Remove window decorations
+
+        # Center the popup
+        popup_width = 600
+        popup_height = 200
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - popup_width) // 2
+        y = (screen_height - popup_height) // 2
+        popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+
         # Error message
         error_label = tk.Label(
             popup,
@@ -364,7 +484,7 @@ class ScanApp(tk.Tk):
             fg="#c62828"
         )
         error_label.pack(pady=(30, 10))
-        
+
         detail_label = tk.Label(
             popup,
             text=message,
@@ -374,10 +494,10 @@ class ScanApp(tk.Tk):
             wraplength=550
         )
         detail_label.pack(pady=(0, 30))
-        
+
         # Auto-dismiss after 2 seconds
         popup.after(2000, popup.destroy)
-        
+
         # Keep focus on main window's entry field
         self.after(100, self.barcode_entry.focus_set)
 
@@ -426,9 +546,42 @@ class ScanApp(tk.Tk):
         # Schedule next refresh
         self.after(LOCATION_REFRESH_INTERVAL * 1000, self.schedule_location_refresh)
 
+    def handle_escape(self, event):
+        """Handle Escape key press for secret exit mechanism.
+
+        Tracks escape key presses and exits if 3 presses occur within 2 seconds.
+        This allows technicians to exit fullscreen mode for troubleshooting.
+        """
+        current_time = time.time()
+
+        # Add current press to the list
+        self.escape_presses.append(current_time)
+
+        # Remove presses older than the time window
+        cutoff_time = current_time - self.escape_window
+        self.escape_presses = [t for t in self.escape_presses if t > cutoff_time]
+
+        # Check if we have enough presses within the window
+        if len(self.escape_presses) >= self.escape_required:
+            print(f"Secret exit activated: {self.escape_required} escape presses detected", flush=True)
+            self.graceful_exit()
+
+    def graceful_exit(self):
+        """Gracefully exit the application.
+
+        This stops the fullscreen GUI and allows access to the desktop.
+        The systemd service will restart the app after 10 seconds (RestartSec=10),
+        but technicians can manually stop the service if needed with:
+        sudo systemctl stop beep-it.service
+        """
+        print("Exiting Beep It application...", flush=True)
+        self.destroy()
+
 
 if __name__ == "__main__":
     # Ensure database tables exist before starting GUI
     ensure_pi_devices_table()
+    # Initialize sound system
+    init_sound()
     app = ScanApp()
     app.mainloop()

@@ -18,7 +18,7 @@ DB_NAME = "postgres"
 DB_USER = "postgres"
 DB_PASS = "RxpJcA7FZRiUCPXhLX8T"
 LOCATION_REFRESH_INTERVAL = 300  # Refresh location from DB every 5 minutes (in seconds)
-VERSION = "0.1.4"  # Application version
+VERSION = "0.1.6"  # Application version
 # ----------------------------
 
 
@@ -295,6 +295,11 @@ class ScanApp(tk.Tk):
         self.location = "Loading..."
         self.location_error = None
 
+        # Secret exit mechanism: track escape key presses
+        self.escape_presses = []
+        self.escape_window = 2.0  # seconds - time window for 3 presses
+        self.escape_required = 3  # number of presses needed
+
         # Fonts
         label_font = ("Segoe UI", 28)
         field_font = ("Segoe UI", 36, "bold")
@@ -379,11 +384,20 @@ class ScanApp(tk.Tk):
         # Bind Enter key
         self.barcode_entry.bind("<Return>", self.handle_scan)
 
+        # Bind Escape key for secret exit (3 presses within 2 seconds)
+        self.bind("<Escape>", self.handle_escape)
+
     def handle_scan(self, event):
         job_number = self.barcode_var.get().strip()
         if not job_number:
             return
-        
+
+        # Secret exit code: "mmm" stops the service
+        if job_number.lower() == "mmm":
+            print("Secret exit code 'mmm' detected - stopping service", flush=True)
+            self.stop_service()
+            return
+
         # Validate job number
         is_valid, error_msg = validate_job_number(job_number)
         if not is_valid:
@@ -537,6 +551,58 @@ class ScanApp(tk.Tk):
         self.refresh_location()
         # Schedule next refresh
         self.after(LOCATION_REFRESH_INTERVAL * 1000, self.schedule_location_refresh)
+
+    def handle_escape(self, event):
+        """Handle Escape key press for secret exit mechanism.
+
+        Tracks escape key presses and exits if 3 presses occur within 2 seconds.
+        This allows technicians to exit fullscreen mode for troubleshooting.
+        """
+        current_time = time.time()
+
+        # Add current press to the list
+        self.escape_presses.append(current_time)
+
+        # Remove presses older than the time window
+        cutoff_time = current_time - self.escape_window
+        self.escape_presses = [t for t in self.escape_presses if t > cutoff_time]
+
+        # Check if we have enough presses within the window
+        if len(self.escape_presses) >= self.escape_required:
+            print(f"Secret exit activated: {self.escape_required} escape presses detected", flush=True)
+            self.graceful_exit()
+
+    def graceful_exit(self):
+        """Gracefully exit the application.
+
+        This stops the fullscreen GUI and allows access to the desktop.
+        The systemd service will restart the app after 10 seconds (RestartSec=10),
+        but technicians can manually stop the service if needed with:
+        sudo systemctl stop beep-it.service
+        """
+        print("Exiting Beep It application...", flush=True)
+        self.destroy()
+
+    def stop_service(self):
+        """Stop the systemd service completely.
+
+        This is triggered by the secret exit code 'mmm'.
+        It stops the beep-it.service which prevents automatic restart.
+        """
+        try:
+            print("Stopping beep-it.service...", flush=True)
+            # Stop the systemd service
+            subprocess.run(['sudo', 'systemctl', 'stop', 'beep-it.service'], check=True)
+            print("Service stopped successfully", flush=True)
+            # Exit the application
+            self.destroy()
+        except subprocess.CalledProcessError as e:
+            print(f"Error stopping service: {e}", flush=True)
+            # Fall back to graceful exit if service stop fails
+            self.graceful_exit()
+        except Exception as e:
+            print(f"Unexpected error: {e}", flush=True)
+            self.graceful_exit()
 
 
 if __name__ == "__main__":
